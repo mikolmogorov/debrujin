@@ -1,126 +1,145 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python
 
 import sys
-import Queue
+from collections import defaultdict
+from Queue import Queue
+
 
 class Vertex:
-	def __init__(self):
-		self.edges = []
-		self.inDegree = 0
+    def __init__(self):
+        self.edges = []
+        self.inDegree = 0
+
 
 class Edge:
-	def __init__(self, seq):
-		self.seq = seq
-		self.vertex = None
-		self.degree = 1
+    def __init__(self, seq):
+        self.seq = seq
+        self.vertex = None
+        self.degree = 1
 
-def buildGraph(inputSeq, kmerLen):
-	graph = {}
+    def __len__(self):
+        return len(self.seq)
 
-	#count kmers
-	kmerHash = {}
+    def __str__(self):
+        first, last = self.seq[:3], self.seq[-3:]
+        return "{0}..{1} ({2}) {3}".format(first, last,
+                                           len(self), self.degree)
 
-	for i in xrange(0, len(inputSeq) - kmerLen + 1):
-		kmer = inputSeq[i : i + kmerLen]
-		if not kmer in kmerHash:
-			kmerHash[kmer] = 1
-		else:
-			kmerHash[kmer] += 1
-		
-		if kmerHash[kmer] > 1 or i == 0 or i == len(inputSeq) - kmerLen:
-			graph[kmer] = Vertex()
 
-	del kmerHash
+def iter_kmers(seq, k):
+    n = len(seq)
+    for i in xrange(0, n - k + 1):
+        yield i, seq[i:i + k]
 
-	#build de-brujin graph
-	#contained as set of vertexes
-	curEdge = None
-	
-	for i in xrange(0, len(inputSeq) - kmerLen + 1):
-		kmer = inputSeq[i : i + kmerLen]
-		if curEdge != None:
-			graph[curKmer].edges[curEdge].seq += kmer[-1]
-		if kmer in graph:
-			if curEdge != None:
-				#seerch for the same edges
-				edge = graph[curKmer].edges[curEdge]
-				deleted = False
-				for e in graph[curKmer].edges:
-					if e == edge:
-						#print "bbb"
-						continue
-					if e.seq == edge.seq:
-						e.degree += 1
-						del graph[curKmer].edges[curEdge]
-						#print "aaa"
-						deleted = True
-						break
-				if not deleted:
-					graph[curKmer].edges[curEdge].vertex = kmer
-					graph[kmer].inDegree += 1
-			#print kmer
-			curKmer = kmer
-			graph[curKmer].edges.append(Edge(kmer))
-			curEdge = len(graph[curKmer].edges) - 1
-	#TODO: ugly hack
-	del graph[curKmer].edges[curEdge]
 
-	#simplify graph
-	print "Simplifying graph"
-	wfsqueue = Queue.Queue()
-	visited = set()
-	firstKmer = inputSeq[0 : kmerLen]
-	visited.add(firstKmer)
-	wfsqueue.put(firstKmer)
+def build_uncompressed_graph(seq, k):
+    n = len(seq)
+    g, seen = {}, defaultdict(int)
+    for i, kmer in iter_kmers(seq, k):
+        seen[kmer] += 1
+        if seen[kmer] > 1 or i in [0, n - k]:
+            g[kmer] = Vertex()
 
-	counter = 1
-	while not wfsqueue.empty():
-		kmer = wfsqueue.get()
-		#print graph[kmer].edges
-		for edge in graph[kmer].edges:
-			curVertex = edge.vertex
+    return g
 
-			if curVertex in visited:
-				continue
 
-			while len(graph[curVertex].edges) == 1 and graph[curVertex].inDegree == 1:
-				edge.seq += graph[curVertex].edges[0].seq[kmerLen:]
-				edge.vertex = graph[curVertex].edges[0].vertex
-				del graph[curVertex]
-				curVertex = edge.vertex
+def build_compressed_graph(inputSeq, kmerLen):
+    graph = build_uncompressed_graph(inputSeq, k)
 
-			print counter, "/", len(graph)
-			counter += 1
-			
-			#TODO: assert fails
-			#assert(curVertex not in visited)
-			visited.add(curVertex)
-			wfsqueue.put(curVertex)
-			
-	return graph
+    #build de-brujin graph
+    #contained as set of vertexes
+    curEdge = None
 
-def readFasta(filename):
-	fasta = open(filename, "r")
-	seq = ""
-	for line in fasta:
-		if line[0] == '>':
-			continue
-		line = line.strip('\n')
-		seq += line
-	return seq
+    for i, kmer in iter_kmers(inputSeq, kmerLen):
+        if curEdge is not None:
+            graph[curKmer].edges[curEdge].seq += kmer[-1]
 
-def outputDot(graph, outFile):
-	outFile.write("digraph {\n")
-	for ver in graph:
-		for edge in graph[ver].edges:
-			outFile.write(ver + " -> " + str(edge.vertex))
-			outFile.write(" [label=\"" + edge.seq[0:3] + "..." + edge.seq[-4:-1])
-			outFile.write("(" + str(len(edge.seq)) + ") " + str(edge.degree) + "\"];\n")
-	outFile.write("}")
+        if kmer in graph:
+            if curEdge != None:
+                #seerch for the same edges
+                edge = graph[curKmer].edges[curEdge]
+                deleted = False
+                for e in graph[curKmer].edges:
+                    if e == edge:
+                        #print "bbb"
+                        continue
+                    if e.seq == edge.seq:
+                        e.degree += 1
+                        del graph[curKmer].edges[curEdge]
+                        #print "aaa"
+                        deleted = True
+                        break
+                if not deleted:
+                    graph[curKmer].edges[curEdge].vertex = kmer
+                    graph[kmer].inDegree += 1
+            #print kmer
+            curKmer = kmer
+            graph[curKmer].edges.append(Edge(kmer))
+            curEdge = len(graph[curKmer].edges) - 1
+    #TODO: ugly hack
+    del graph[curKmer].edges[curEdge]
 
-#seq = "AACGTGCGCTAGCTGGCTAGCTAGCCGATAGCTCTAGGCTAGGCGATCGCTACAT"
-seq = readFasta(sys.argv[1])
-k = 20
+    #simplify graph
+    print "Simplifying graph"
+    wfsqueue = Queue()
+    visited = set()
+    firstKmer = inputSeq[0 : kmerLen]
+    visited.add(firstKmer)
+    wfsqueue.put(firstKmer)
 
-graph = buildGraph(seq, k)
-outputDot(graph, open(sys.argv[2], "w"))
+    counter = 1
+    while not wfsqueue.empty():
+        kmer = wfsqueue.get()
+        #print graph[kmer].edges
+        for edge in graph[kmer].edges:
+            curVertex = edge.vertex
+
+            if curVertex in visited:
+                continue
+
+            while len(graph[curVertex].edges) == 1 and graph[curVertex].inDegree == 1:
+                edge.seq += graph[curVertex].edges[0].seq[kmerLen:]
+                edge.vertex = graph[curVertex].edges[0].vertex
+                del graph[curVertex]
+                curVertex = edge.vertex
+
+            print counter, "/", len(graph)
+            counter += 1
+
+            #TODO: assert fails
+            #assert(curVertex not in visited)
+            visited.add(curVertex)
+            wfsqueue.put(curVertex)
+
+    return graph
+
+
+def read_fasta(filename):
+    fasta = open(filename, "r")
+    seq = ""
+    for line in fasta:
+        if line[0] == '>':
+            continue
+        line = line.strip('\n')
+        seq += line
+    return seq
+
+
+def write_dot(graph, dot_file):
+    dot_file.write("digraph {\n")
+    for v in graph:
+        for edge in graph[v].edges:
+            dot_file.write("""{0} -> {1.vertex} [label = "{1}"];\n"""
+                           .format(v, edge))
+    dot_file.write("}")
+
+
+if __name__ == "__main__":
+    try:
+        seq_path, dot_path, k = sys.argv[1:]
+        k = int(k)
+    except ValueError:
+        print("Usage: build.py SEQ_PATH DOT_PATH K")
+    else:
+        graph = build_compressed_graph(read_fasta(seq_path), k)
+        write_dot(graph, open(dot_path, "w"))
