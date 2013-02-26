@@ -1,31 +1,12 @@
 #!/usr/bin/env python2
 
 import sys
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 from Queue import Queue
 
+from build import Vertex, Edge, iter_kmers, read_fasta, write_dot
+
 NUCLEOTIDES = ['A', 'C', 'G', 'T']
-
-
-class Vertex:
-    def __init__(self):
-        self.edges = []
-        self.inDegree = 0
-
-
-class Edge:
-    def __init__(self, seq):
-        self.seq = seq
-        self.vertex = None
-        self.degree = 1
-
-    def __len__(self):
-        return len(self.seq)
-
-    def __str__(self):
-        first, last = self.seq[:3], self.seq[-3:]
-        return "{0}..{1} ({2}) {3}".format(first, last,
-                                           len(self), self.degree)
 
 
 def iter_kmers(seq, k):
@@ -87,32 +68,12 @@ def build_compressed_graph(inputSeq, kmerLen):
 			if not found:
 				graph[prevVertex].edges.append(Edge(edgeSeq))
 				graph[prevVertex].edges[-1].vertex = kmer
-				graph[prevVertex].inDegree += 1
+				graph[prevVertex].in_degree += 1
 
 			prevVertex = kmer
 			edgeSeq = kmer
 
 	return graph
-
-
-def read_fasta(filename):
-    fasta = open(filename, "r")
-    seq = ""
-    for line in fasta:
-        if line[0] == '>':
-            continue
-        line = line.strip('\n')
-        seq += line
-    return seq
-
-
-def write_dot(graph, dot_file):
-    dot_file.write("digraph {\n")
-    for v in graph:
-        for edge in graph[v].edges:
-            dot_file.write("""{0} -> {1.vertex} [label = "{1}"];\n"""
-                           .format(v, edge))
-    dot_file.write("}")
 
 
 if __name__ == "__main__":

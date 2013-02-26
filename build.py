@@ -5,25 +5,39 @@ from collections import defaultdict
 from Queue import Queue
 
 
-class Vertex:
+class Vertex(object):
     def __init__(self):
         self.edges = []
-        self.inDegree = 0
+        self.in_degree = 0
+
+    def __str__(self):
+        return ",".join(map(str, self.edges))
+
+    __repr__ = __str__
+
+    def __eq__(self, other):
+        return self.edges == other.edges and self.in_degree == other.in_degree
 
 
-class Edge:
+class Edge(object):
     def __init__(self, seq):
         self.seq = seq
         self.vertex = None
         self.degree = 1
 
-    def __len__(self):
-        return len(self.seq)
-
     def __str__(self):
         first, last = self.seq[:3], self.seq[-3:]
         return "{0}..{1} ({2}) {3}".format(first, last,
                                            len(self), self.degree)
+
+    def __len__(self):
+        return len(self.seq)
+
+    def __eq__(self, other):
+        return all([self.seq == other.seq,
+                    self.vertex == other.vertex,
+                    self.degree == other.degree])
+
 
 
 def iter_kmers(seq, k):
@@ -44,12 +58,11 @@ def build_uncompressed_graph(seq, k):
 
 
 def build_compressed_graph(inputSeq, kmerLen):
-    graph = build_uncompressed_graph(inputSeq, k)
+    graph = build_uncompressed_graph(inputSeq, kmerLen)
 
     #build de-brujin graph
     #contained as set of vertexes
     curEdge = None
-
     for i, kmer in iter_kmers(inputSeq, kmerLen):
         if curEdge is not None:
             graph[curKmer].edges[curEdge].seq += kmer[-1]
@@ -71,11 +84,12 @@ def build_compressed_graph(inputSeq, kmerLen):
                         break
                 if not deleted:
                     graph[curKmer].edges[curEdge].vertex = kmer
-                    graph[kmer].inDegree += 1
+                    graph[kmer].in_degree += 1
             #print kmer
             curKmer = kmer
             graph[curKmer].edges.append(Edge(kmer))
             curEdge = len(graph[curKmer].edges) - 1
+
     #TODO: ugly hack
     del graph[curKmer].edges[curEdge]
 
@@ -97,7 +111,7 @@ def build_compressed_graph(inputSeq, kmerLen):
             if curVertex in visited:
                 continue
 
-            while len(graph[curVertex].edges) == 1 and graph[curVertex].inDegree == 1:
+            while len(graph[curVertex].edges) == 1 and graph[curVertex].in_degree == 1:
                 edge.seq += graph[curVertex].edges[0].seq[kmerLen:]
                 edge.vertex = graph[curVertex].edges[0].vertex
                 del graph[curVertex]
