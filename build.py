@@ -33,15 +33,15 @@ class FastqSource:
             counter = (counter + 1) % 4
             if counter == 2:
                 yield line.strip()
-                yield getReverseCompliment(line.strip())
+                yield getReverseComplement(line.strip())
         fin.close()
 
 
-def getReverseCompliment( seq ):
-    COMPLIMENT = {'A' : 'T', 'T' : 'A', 'C' : 'G', 'G' : 'C'}
+def getReverseComplement( seq ):
+    COMPLEMENT = {'A' : 'T', 'T' : 'A', 'C' : 'G', 'G' : 'C'}
     s = []
     for i in seq:
-        s.append(COMPLIMENT[i])
+        s.append(COMPLEMENT[i])
     return "".join(s[::-1])
 
 
