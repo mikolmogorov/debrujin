@@ -1,43 +1,48 @@
-#!/usr/bin/env python
+#!/usr/bin/env python2
 
 import sys
-from collections import defaultdict
 from Queue import Queue
 
 
-class Vertex(object):
+
+class Vertex:
     def __init__(self):
-        self.edges = []
-        self.in_degree = 0
-
-    def __str__(self):
-        return ",".join(map(str, self.edges))
-
-    __repr__ = __str__
-
-    def __eq__(self, other):
-        return self.edges == other.edges and self.in_degree == other.in_degree
+        self.in_edges = []
+        self.out_edges = []
 
 
-class Edge(object):
+class Edge:
     def __init__(self, seq):
         self.seq = seq
         self.vertex = None
-        self.degree = 1
-
-    def __str__(self):
-        first, last = self.seq[:3], self.seq[-3:]
-        return "{0}..{1} ({2}) {3}".format(first, last,
-                                           len(self), self.degree)
+        self.coverage = 0.0
 
     def __len__(self):
         return len(self.seq)
 
-    def __eq__(self, other):
-        return all([self.seq == other.seq,
-                    self.vertex == other.vertex,
-                    self.degree == other.degree])
+    def __str__(self):
+        return "L={0} C={1:5.2f}".format(len(self), self.coverage)
 
+class FastqSource:
+    def __init__(self, filename):
+        self.fastq = filename
+    def reads(self):
+        fin = open(self.fastq, "r")
+        counter = 0
+        for line in fin:
+            counter = (counter + 1) % 4
+            if counter == 2:
+                yield line.strip()
+                yield getReverseCompliment(line.strip())
+        fin.close()
+
+
+def getReverseCompliment( seq ):
+    COMPLIMENT = {'A' : 'T', 'T' : 'A', 'C' : 'G', 'G' : 'C'}
+    s = []
+    for i in seq:
+        s.append(COMPLIMENT[i])
+    return "".join(s[::-1])
 
 
 def iter_kmers(seq, k):
@@ -45,86 +50,150 @@ def iter_kmers(seq, k):
     for i in xrange(0, n - k + 1):
         yield i, seq[i:i + k]
 
+NUCLEOTIDES = ['A', 'C', 'G', 'T']
 
-def build_uncompressed_graph(seq, k):
-    n = len(seq)
-    g, seen = {}, defaultdict(int)
-    for i, kmer in iter_kmers(seq, k):
-        seen[kmer] += 1
-        if seen[kmer] > 1 or i in [0, n - k]:
-            g[kmer] = Vertex()
+def getKmerNextList(kmer, kmerHash):
+    l = []
+    base = kmer[1:]
+    for n in NUCLEOTIDES:
+        if (base + n) in kmerHash:
+            l.append(n)
+    return l,base
 
-    return g
+def getKmerPrevList(kmer, kmerHash):
+    l = []
+    base = kmer[:-1]
+    for n in NUCLEOTIDES:
+        if (n + base) in kmerHash:
+            l.append(n)
+    return l,base
+
+def build_hash(fastqSrc, k):
+    print "Buliding kmer hash"
+    h = {}
+    for read in fastqSrc.reads():
+        for i, kmer in iter_kmers(read, k):
+            h[kmer] = h.get(kmer, 0) + 1
+    return h
 
 
-def build_compressed_graph(inputSeq, kmerLen):
-    graph = build_uncompressed_graph(inputSeq, kmerLen)
+def count_vertex(kmerHash):
+    count = 0
+    for kmer in kmerHash:
+        r, rbase = getKmerNextList(kmer, kmerHash)
+        l, lbase = getKmerPrevList(kmer, kmerHash)
+        if len(r) != 1 or len(l) != 1:
+            count += 1
+    return count
 
-    #build de-brujin graph
-    #contained as set of vertexes
-    curEdge = None
-    for i, kmer in iter_kmers(inputSeq, kmerLen):
-        if curEdge is not None:
-            graph[curKmer].edges[curEdge].seq += kmer[-1]
 
-        if kmer in graph:
-            if curEdge != None:
-                #seerch for the same edges
-                edge = graph[curKmer].edges[curEdge]
-                deleted = False
-                for e in graph[curKmer].edges:
-                    if e == edge:
-                        #print "bbb"
-                        continue
-                    if e.seq == edge.seq:
-                        e.degree += 1
-                        del graph[curKmer].edges[curEdge]
-                        #print "aaa"
-                        deleted = True
-                        break
-                if not deleted:
-                    graph[curKmer].edges[curEdge].vertex = kmer
-                    graph[kmer].in_degree += 1
-            #print kmer
-            curKmer = kmer
-            graph[curKmer].edges.append(Edge(kmer))
-            curEdge = len(graph[curKmer].edges) - 1
+def goBranch(kmer, kmerHash, visited):
+    coverage = 0.0
+    nVertex = 0
+    seq = kmer[:-1]
+    while True:
+        coverage += kmerHash[kmer]
+        nVertex += 1
+        seq += kmer[-1]
 
-    #TODO: ugly hack
-    del graph[curKmer].edges[curEdge]
+        r, rbase = getKmerNextList(kmer, kmerHash)
+        l, lbase = getKmerPrevList(kmer, kmerHash)
 
-    #simplify graph
-    print "Simplifying graph"
-    wfsqueue = Queue()
+        if len(r) == 1 and len(l) == 1:
+            visited.add(kmer)
+            kmer = rbase + r[0]
+        else:
+            return kmer, coverage / nVertex, seq, r
+
+
+def build(fastqSrc, kmerLen):
+    graph = {}
+    tot_cover = 0
+    num_edges = 0
+    kmerHash = build_hash(fastqSrc, kmerLen)
+    print "Building graph"
+    #print count_vertex(kmerHash)
     visited = set()
-    firstKmer = inputSeq[0 : kmerLen]
-    visited.add(firstKmer)
-    wfsqueue.put(firstKmer)
+    for newKmer in kmerHash:
+        if newKmer in visited:
+            continue
 
-    counter = 1
-    while not wfsqueue.empty():
-        kmer = wfsqueue.get()
-        #print graph[kmer].edges
-        for edge in graph[kmer].edges:
-            curVertex = edge.vertex
+        bfsqueue = Queue()
+        bfsqueue.put((newKmer, None))
+        while not bfsqueue.empty():
+            kmer, prevVertex = bfsqueue.get()
 
-            if curVertex in visited:
+            vertex, cover, seq, outBranch = goBranch(kmer, kmerHash, visited)
+
+            if not vertex in graph:
+                graph[vertex] = Vertex()
+            if prevVertex:
+                graph[prevVertex].out_edges.append(Edge(seq))
+                graph[prevVertex].out_edges[-1].vertex = vertex
+                graph[prevVertex].out_edges[-1].coverage = cover
+                graph[vertex].in_edges.append(prevVertex)
+                tot_cover += cover
+                num_edges += 1
+
+            if vertex in visited:
                 continue
+            visited.add(vertex)
 
-            while len(graph[curVertex].edges) == 1 and graph[curVertex].in_degree == 1:
-                edge.seq += graph[curVertex].edges[0].seq[kmerLen:]
-                edge.vertex = graph[curVertex].edges[0].vertex
-                del graph[curVertex]
-                curVertex = edge.vertex
+            for nr in outBranch:
+                newMer = vertex[1:] + nr
+                bfsqueue.put((newMer, vertex))
 
-            print counter, "/", len(graph)
-            counter += 1
+    #print len(visited), len(kmerHash)
+    return graph, tot_cover / num_edges
 
-            #TODO: assert fails
-            #assert(curVertex not in visited)
-            visited.add(curVertex)
-            wfsqueue.put(curVertex)
 
+def cut_graph(graph, threshold):
+    print "Removing tips",
+    visited = set()
+    toDelete = []
+    marked = []
+    for v in graph:
+        #cut vertex with in_degree = 1, out_degree = 0
+        if (len(graph[v].in_edges) == 1 and
+                len(graph[v].out_edges) == 0):
+            prev = graph[v].in_edges[0]
+            inEdge = [e for e in graph[prev].out_edges if e.vertex == v][0]
+            if inEdge.coverage < threshold:
+                toDelete.append(v)
+                marked.append(prev)
+                graph[prev].out_edges = [e for e in graph[prev].out_edges if e.vertex != v]
+
+        if (len(graph[v].in_edges) == 0 and
+                len(graph[v].out_edges) == 1):
+            nextV = graph[v].out_edges[0].vertex
+            if graph[v].out_edges[0].coverage < threshold:
+                toDelete.append(v)
+                marked.append(nextV)
+                graph[nextV].in_edges.remove(v)
+
+    print "OK", len(toDelete)
+    for elem in toDelete:
+        if elem in graph:
+            del graph[elem]
+
+    for vertex in marked:
+        #print len(graph[vertex].in_edges), len(graph[vertex].out_edges)
+        if not vertex in graph:
+            continue
+        if len(graph[vertex].in_edges) != 1 or len(graph[vertex].out_edges) != 1:
+            continue
+
+        prev_v = graph[vertex].in_edges[0]
+        next_v = graph[vertex].out_edges[0].vertex
+        for edge in graph[prev_v].out_edges:
+            if edge.vertex == vertex:
+                edge.vertex = next_v
+                edge.seq += graph[vertex].out_edges[0].seq
+                edge.coverage = (edge.coverage + graph[vertex].out_edges[0].coverage) / 2
+                break
+        graph[next_v].in_edges.remove(vertex)
+        graph[next_v].in_edges.append(prev_v)
+        del graph[vertex]
     return graph
 
 
@@ -140,20 +209,47 @@ def read_fasta(filename):
 
 
 def write_dot(graph, dot_file):
+    print "Writing dot file"
     dot_file.write("digraph {\n")
+    v_ids = {}
+    id_count = 0
     for v in graph:
-        for edge in graph[v].edges:
-            dot_file.write("""{0} -> {1.vertex} [label = "{1}"];\n"""
-                           .format(v, edge))
+        if v not in v_ids:
+            v_ids[v] = id_count
+            id_count += 1
+        for edge in graph[v].out_edges:
+            if edge.vertex not in v_ids:
+                v_ids[edge.vertex] = id_count
+                id_count += 1
+            dot_file.write("""{0} -> {1} [label = "{2}"];\n""".format(v_ids[v], v_ids[edge.vertex], edge))
     dot_file.write("}")
 
+def write_fasta(graph, fileName):
+    print "Exporting edges to FASTA file"
+    fd = open(fileName, "w")
+
+    counter = 1
+    for kmer in graph:
+        for edge in graph[kmer].out_edges:
+            fd.write("> edge" + str(counter) + "\n")
+            seq = edge.seq
+            while seq != "":
+                fd.write(seq[:80] + "\n")
+                seq = seq[80:]
+            counter += 1
+            fd.write("\n")
+    fd.close()
 
 if __name__ == "__main__":
     try:
-        seq_path, dot_path, k = sys.argv[1:]
+        seq_path, k, threshold = sys.argv[1:]
         k = int(k)
     except ValueError:
-        print("Usage: build.py SEQ_PATH DOT_PATH K")
+        print("Usage: build.py SEQ_PATH K THRESHOLD")
     else:
-        graph = build_compressed_graph(read_fasta(seq_path), k)
-        write_dot(graph, open(dot_path, "w"))
+        graph, avg_cover = build(FastqSource(seq_path), k)
+        print "Average coverage:", avg_cover
+        cut_graph(graph, avg_cover * float(threshold) / 100)
+        prefix = seq_path.split(".")[0]
+        write_dot(graph, open(prefix + ".dot", "w"))
+        write_fasta(graph, prefix + ".fasta")
