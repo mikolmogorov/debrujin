@@ -3,13 +3,10 @@
 import sys
 from Queue import Queue
 
-
-
 class Vertex:
     def __init__(self):
         self.in_edges = []
         self.out_edges = []
-
 
 class Edge:
     def __init__(self, seq):
@@ -36,6 +33,26 @@ class FastqSource:
                 yield getReverseComplement(line.strip())
         fin.close()
 
+class FastaSource:
+    def __init__(self, filename):
+        self.fasta = filename
+    def reads(self):
+        fd = open(self.fasta, "r")
+        seq = ""
+        header = ""
+        for line in fd:
+            l = line.strip("\n")
+            if l.startswith(">"):
+                if len(header) > 0:
+                    yield header, seq
+                    seq = ""
+                header = l[1:]
+            else:
+                seq += l
+        if seq != "":
+            yield seq
+            yield getReverseComplement(seq)
+        fd.close()
 
 def getReverseComplement( seq ):
     COMPLEMENT = {'A' : 'T', 'T' : 'A', 'C' : 'G', 'G' : 'C'}
@@ -88,22 +105,23 @@ def count_vertex(kmerHash):
 
 
 def goBranch(kmer, kmerHash, visited):
-    coverage = 0.0
+    coverage = 0
     nVertex = 0
     seq = kmer[:-1]
+    oldKmer = kmer
     while True:
-        coverage += kmerHash[kmer]
-        nVertex += 1
-        seq += kmer[-1]
-
         r, rbase = getKmerNextList(kmer, kmerHash)
         l, lbase = getKmerPrevList(kmer, kmerHash)
 
         if len(r) == 1 and len(l) == 1:
+            coverage += kmerHash[kmer]
+            nVertex += 1
+            seq += kmer[-1]
+
             visited.add(kmer)
             kmer = rbase + r[0]
         else:
-            return kmer, coverage / nVertex, seq, r
+            return kmer, float(coverage) / len(seq), seq, r
 
 
 def build(fastqSrc, kmerLen):
@@ -172,6 +190,7 @@ def cut_graph(graph, threshold):
                 graph[nextV].in_edges.remove(v)
 
     print "OK", len(toDelete)
+    deletedCount = len(toDelete)
     for elem in toDelete:
         if elem in graph:
             del graph[elem]
@@ -194,7 +213,7 @@ def cut_graph(graph, threshold):
         graph[next_v].in_edges.remove(vertex)
         graph[next_v].in_edges.append(prev_v)
         del graph[vertex]
-    return graph
+    return deletedCount
 
 
 def read_fasta(filename):
@@ -248,8 +267,11 @@ if __name__ == "__main__":
         print("Usage: build.py SEQ_PATH K THRESHOLD")
     else:
         graph, avg_cover = build(FastqSource(seq_path), k)
+        #graph, avg_cover = build(FastaSource(seq_path), k)
         print "Average coverage:", avg_cover
-        cut_graph(graph, avg_cover * float(threshold) / 100)
+        while cut_graph(graph, avg_cover * float(threshold) / 100) != 0:
+            pass
+        #cut_graph(graph, avg_cover * float(threshold) / 100)
         prefix = seq_path.split(".")[0]
         write_dot(graph, open(prefix + ".dot", "w"))
         write_fasta(graph, prefix + ".fasta")
